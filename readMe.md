@@ -32,3 +32,14 @@ The second phase scales the simulation across a network, allowing it to handle m
 * **Distributed Computing:** Implementation of the NetRPC protocol for inter-node communication.
 * **Cloud Infrastructure:** Experience with AWS EC2 orchestration.
 * **Algorithms:** Optimised 2D grid manipulation and neighbour-sensing logic.
+
+---
+
+## Report
+
+![CSA Report Page 1](report-img/csa_report_page_1.png)
+![CSA Report Page 2](report-img/csa_report_page_2.png)
+![CSA Report Page 3](report-img/csa_report_page_3.png)
+![CSA Report Page 4](report-img/csa_report_page_4.png)
+![CSA Report Page 5](report-img/csa_report_page_5.png)
+![CSA Report Page 6](report-img/csa_report_page_6.png)
