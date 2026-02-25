@@ -3,6 +3,8 @@ package main
 import (
 	"flag"
 	"fmt"
+	"net"
+	"net/rpc"
 	"os"
 	"strings"
 )
@@ -34,4 +36,19 @@ func main() {
 		panic(err)
 	}
 
+}
+
+// startGolServer starts the RPC server for the GOL worker
+func startGolServer(port string, b *Broker) error {
+	// Register GolWorker type so the methods can be called via the RPC
+	rpc.Register(b)
+	// Listen for TCP connections on the port
+	listener, err := net.Listen("tcp", ":"+port)
+	if err != nil {
+		return err
+	}
+	defer listener.Close()
+	// Accept and handle RPC connections
+	rpc.Accept(listener)
+	return nil
 }

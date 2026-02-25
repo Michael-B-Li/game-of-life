@@ -20,10 +20,11 @@ type distributorChannels struct {
 
 // Request contains the world state and parameters for processing
 type Request struct {
-	World  [][]byte
-	Height int
-	Width  int
-	Turns  int
+	World        [][]byte
+	Height       int
+	Width        int
+	Turns        int
+	LiveViewAddr string
 }
 
 // Response contains the evolved world state and alive cells
@@ -70,7 +71,7 @@ func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 	h := p.ImageHeight
 	w := p.ImageWidth
 
-	// Connect to the GOL server, local for now
+	// Connect to the GOL server
 	serverAddr := os.Getenv("GOL_SERVER")
 	if serverAddr == "" {
 		serverAddr = "127.0.0.1:8030"
@@ -81,6 +82,13 @@ func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 		panic("Failed to connect to GOL broker: " + err.Error())
 	}
 	defer client.Close()
+
+	// Start live view server for receiving turn updates
+	liveServer, liveAddr, liveErr := startLiveViewServer(c.events)
+	if liveErr != nil {
+		fmt.Println("Live SDL unavailable:", liveErr)
+	}
+	defer shutdownLiveServer(liveServer)
 
 	filename := fmt.Sprintf("%dx%d", p.ImageWidth, p.ImageHeight)
 
@@ -136,13 +144,14 @@ func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 		}
 	}()
 
-	// Start processing in a goroutine
+	// Start processing in a goroutine, sending an RPC call to Broker.ProcessTurns
 	go func() {
 		request := Request{
-			World:  world,
-			Height: h,
-			Width:  w,
-			Turns:  p.Turns,
+			World:        world,
+			Height:       h,
+			Width:        w,
+			Turns:        p.Turns,
+			LiveViewAddr: liveAddr,
 		}
 		response := new(Response)
 
@@ -153,9 +162,9 @@ func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 		processingDone <- response
 	}()
 
-	// Handle keypresses and wait for processing to complete
 	var finalWorld [][]byte
 	var aliveCells []util.Cell
+
 	// Consolidates shutdown logic
 	finalise := func(resp *Response) {
 		close(done)
@@ -164,10 +173,11 @@ func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 		aliveCells = resp.AliveCells
 
 		c.events <- CellsFlipped{turn, aliveCells}
-		c.events <- TurnComplete{turn}
+		//c.events <- TurnComplete{turn}
 		c.events <- FinalTurnComplete{turn, aliveCells}
 		saveCurrentState(p, c, finalWorld, turn)
 		c.events <- StateChange{turn, Quitting}
+		shutdownLiveServer(liveServer)
 		close(c.events)
 	}
 
@@ -186,17 +196,24 @@ func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 				}
 
 			case 'q':
-				// Closes controller client program, without causing error on the Gol server
-				stateReq := StateRequest{}
-				stateRes := new(StateResponse)
-				err := client.Call("Broker.GetCurrentState", stateReq, stateRes)
-				if err == nil {
-					saveCurrentState(p, c, stateRes.World, stateRes.Turn)
-					c.events <- StateChange{stateRes.Turn, Quitting}
+				// Closes controller client program after requesting the broker stops processing
+				shutdownReq := ShutdownRequest{}
+				shutdownRes := new(ShutdownResponse)
+				if err := client.Call("Broker.Shutdown", shutdownReq, shutdownRes); err == nil {
+					saveCurrentState(p, c, shutdownRes.World, shutdownRes.Turn)
+					c.events <- StateChange{shutdownRes.Turn, Quitting}
 				} else {
-					c.events <- StateChange{turn, Quitting}
+					stateReq := StateRequest{}
+					stateRes := new(StateResponse)
+					if stateErr := client.Call("Broker.GetCurrentState", stateReq, stateRes); stateErr == nil {
+						saveCurrentState(p, c, stateRes.World, stateRes.Turn)
+						c.events <- StateChange{stateRes.Turn, Quitting}
+					} else {
+						c.events <- StateChange{turn, Quitting}
+					}
 				}
 				close(done)
+				shutdownLiveServer(liveServer)
 				close(c.events)
 				return
 
@@ -209,8 +226,14 @@ func distributor(p Params, c distributorChannels, keyPresses <-chan rune) {
 					saveCurrentState(p, c, shutdownRes.World, shutdownRes.Turn)
 					c.events <- FinalTurnComplete{shutdownRes.Turn, shutdownRes.AliveCells}
 				}
+				killReq := KillRequest{}
+				killRes := new(KillResponse)
+				if killErr := client.Call("Broker.Kill", killReq, killRes); killErr != nil {
+					fmt.Println("Error terminating broker:", killErr)
+				}
 				close(done)
 				c.events <- StateChange{shutdownRes.Turn, Quitting}
+				shutdownLiveServer(liveServer)
 				close(c.events)
 				os.Exit(0)
 				return
